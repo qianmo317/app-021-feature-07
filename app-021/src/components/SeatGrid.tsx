@@ -1,8 +1,9 @@
-import type { Assignment, ClassEntity, Seat, Student } from '../types'
+import type { Assignment, ClassEntity, Seat, SeatTag, Student } from '../types'
 import { useMemo, useRef } from 'react'
 import { Glasses, Focus, Ear, Accessibility, Pin, GraduationCap } from 'lucide-react'
+import { tagSource } from '../lib/layout'
 
-// ============ 座位图（共用组件）：Rotations 拖拽模式 / Print 打印模式 ============
+// ============ 座位图（共用组件）：Rotations 拖拽模式 / Setup 标记编辑模式 / Print 打印模式 ============
 
 interface SeatGridProps {
   cls: ClassEntity
@@ -11,6 +12,20 @@ interface SeatGridProps {
   onSwapPreview?: (from: string, to: string | null) => void
   onDropSwap?: (from: string, to: string) => void
   compact?: boolean
+  // 按标记查座位：高亮带此标记的座位，其余变暗
+  highlightTag?: SeatTag | null
+  // 配置页：点击座位弹出标记编辑
+  selectable?: boolean
+  selectedSeatId?: string | null
+  onSeatClick?: (seat: Seat) => void
+}
+
+// 座位角落的手动补标小记号（✦ = 手动来源，自动标记不带）
+const MANUAL_MARK: Partial<Record<SeatTag, string>> = {
+  aisle: '过',
+  window: '窗',
+  door: '门',
+  stage_side: '台',
 }
 
 interface GridMeta {
@@ -34,7 +49,18 @@ function gridMeta(cls: ClassEntity): GridMeta {
   }
 }
 
-export function SeatGrid({ cls, assignment, draggable, onSwapPreview, onDropSwap, compact }: SeatGridProps) {
+export function SeatGrid({
+  cls,
+  assignment,
+  draggable,
+  onSwapPreview,
+  onDropSwap,
+  compact,
+  highlightTag,
+  selectable,
+  selectedSeatId,
+  onSeatClick,
+}: SeatGridProps) {
   const meta = useMemo(() => gridMeta(cls), [cls])
   const studentById = useMemo(() => new Map(cls.students.map((s) => [s.id, s])), [cls.students])
   // 拖拽源座位：dragover 阶段 dataTransfer.getData() 受 protected mode 限制（返回空串），
@@ -87,6 +113,7 @@ export function SeatGrid({ cls, assignment, draggable, onSwapPreview, onDropSwap
         {cls.seats.map((seat) => {
           const st = occupantOf(seat)
           const tags = seat.tags
+          const highlighted = highlightTag ? tags.includes(highlightTag) : false
           const cls2 = [
             'seat',
             st ? 'seat-occupied' : 'seat-empty',
@@ -94,9 +121,16 @@ export function SeatGrid({ cls, assignment, draggable, onSwapPreview, onDropSwap
             tags.includes('window') ? 'tag-window' : '',
             tags.includes('door') ? 'tag-door' : '',
             tags.includes('aisle') ? 'tag-aisle' : '',
+            tags.includes('stage_side') ? 'tag-stage' : '',
+            selectable ? 'seat-selectable' : '',
+            selectedSeatId === seat.id ? 'seat-selected' : '',
+            highlightTag ? (highlighted ? 'seat-highlight' : 'seat-dim') : '',
           ]
             .filter(Boolean)
             .join(' ')
+          const manualMarks = (Object.keys(MANUAL_MARK) as SeatTag[]).filter(
+            (t) => tags.includes(t) && tagSource(seat, t) === 'manual',
+          )
           return (
             <div
               key={seat.id}
@@ -106,7 +140,10 @@ export function SeatGrid({ cls, assignment, draggable, onSwapPreview, onDropSwap
               data-row={seat.row}
               data-col={seat.col}
               data-student={st?.name ?? ''}
+              data-highlight={highlightTag ? String(highlighted) : undefined}
+              data-manual-tags={manualMarks.length ? manualMarks.join(',') : undefined}
               draggable={draggable && !!st}
+              onClick={selectable ? () => onSeatClick?.(seat) : undefined}
               onDragStart={(e) => handleDragStart(e, seat)}
               onDragEnter={(e) => handleDragOver(e, seat)}
               onDragOver={(e) => handleDragOver(e, seat)}
@@ -164,12 +201,28 @@ export function SeatGrid({ cls, assignment, draggable, onSwapPreview, onDropSwap
               ) : (
                 <span className="seat-name seat-name-empty">空</span>
               )}
+              {manualMarks.length > 0 && (
+                <span className="seat-manual-marks" aria-label="手动补标">
+                  {manualMarks.map((t) => (
+                    <em
+                      key={t}
+                      className="manual-mark"
+                      title={`${t === 'aisle' ? '靠过道' : t === 'window' ? '靠窗' : t === 'door' ? '靠门' : '讲台侧'}（老师手动补标，重算布局时保留）`}
+                    >
+                      ✦{MANUAL_MARK[t]}
+                    </em>
+                  ))}
+                </span>
+              )}
             </div>
           )
         })}
       </div>
       <div className="seatmap-footer">
-        <span>第 1 排在最上方（讲台侧）· 左侧为靠窗</span>
+        <span>
+          第 1 排在最上方（讲台侧）· {cls.layout.doorSide === 'right' ? '右侧靠门、左侧靠窗' : '左侧靠门、右侧靠窗'} ·
+          ✦ = 老师手动补标（布局重算时保留）
+        </span>
       </div>
     </div>
   )

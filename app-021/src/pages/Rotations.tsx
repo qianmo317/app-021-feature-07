@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react'
 import { Link } from '../router'
 import { useStore } from '../store'
+import type { SeatTag } from '../types'
 import type { SwapPreview } from '../lib/fairness'
 import { computeFairness, previewSwap, weekStats } from '../lib/fairness'
 import { SeatGrid } from '../components/SeatGrid'
+import { TagFilterBar } from '../components/TagFilterBar'
 import { randomSeed } from '../lib/engine'
 import { downloadCSV, weeksCSV } from '../lib/csv'
 import { AlertTriangle, CheckCircle2, Dices, Download, Printer, RotateCcw, Undo2, Wand2 } from 'lucide-react'
@@ -18,6 +20,7 @@ export function Rotations({ classId }: { classId: string }) {
   const [seedDraft, setSeedDraft] = useState<string | null>(null)
   const [weeksDraft, setWeeksDraft] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [highlight, setHighlight] = useState<SeatTag | null>(null)
 
   const assignment = useMemo(() => cls?.assignments.find((a) => a.week === week), [cls, week])
   const hasPlan = !!cls && cls.assignments.length > 0
@@ -26,6 +29,7 @@ export function Rotations({ classId }: { classId: string }) {
     () => (cls && assignment ? weekStats(cls, assignment.map, assignment.week) : null),
     [cls, assignment],
   )
+  const occupiedIds = useMemo(() => new Set(Object.keys(assignment?.map ?? {})), [assignment])
 
   if (!cls) {
     return (
@@ -193,10 +197,18 @@ export function Rotations({ classId }: { classId: string }) {
                 setPreview(null)
               }}
             >
+              <TagFilterBar
+                cls={cls}
+                active={highlight}
+                onSelect={setHighlight}
+                occupiedIds={occupiedIds}
+                testid="rotations-tag-filter"
+              />
               <SeatGrid
                 cls={cls}
                 assignment={assignment}
                 draggable
+                highlightTag={highlight}
                 onSwapPreview={(from, to) => {
                   setDragging(from || null)
                   if (!from || !to) {
@@ -211,6 +223,8 @@ export function Rotations({ classId }: { classId: string }) {
           ) : (
             <div className="empty-hint">
               <p>该周尚未生成座位表。</p>
+              <TagFilterBar cls={cls} active={highlight} onSelect={setHighlight} testid="rotations-tag-filter" />
+              <SeatGrid cls={cls} highlightTag={highlight} />
             </div>
           )}
         </div>

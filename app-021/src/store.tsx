@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import type { Assignment, ClassEntity } from './types'
 import { storage } from './lib/storage'
 import { uid } from './lib/id'
-import { buildSeats } from './lib/layout'
+import { buildSeats, normalizeSeats } from './lib/layout'
 import {
   generateMissingWeeks,
   generatePlan,
@@ -13,6 +13,11 @@ import {
 import { previewSwap } from './lib/fairness'
 
 // ================= 集中式状态：所有业务逻辑在 Store，组件只做展示与派发 =================
+
+// 读入旧数据时对座位标记做一次对账（纯逻辑见 lib/layout.ts 的 normalizeSeats）
+function normalizeClass(cls: ClassEntity): ClassEntity {
+  return { ...cls, seats: normalizeSeats(cls.layout, cls.seats) }
+}
 
 export type RegenMode = 'all' | 'from' | 'week' | 'missing'
 
@@ -59,7 +64,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     storage
       .getAll()
-      .then((all) => setClasses(all.sort((a, b) => a.createdAt - b.createdAt)))
+      .then((all) => {
+        const normalized = all.map(normalizeClass)
+        // 仅把真正发生对账/迁移的班级写回（读路径尽量无写入副作用）
+        const changed = normalized.filter((c, i) => JSON.stringify(c.seats) !== JSON.stringify(all[i].seats))
+        if (changed.length > 0) {
+          Promise.all(changed.map((c) => storage.put(c))).catch((e) => console.error('标记对账写回失败', e))
+        }
+        setClasses(normalized.sort((a, b) => a.createdAt - b.createdAt))
+      })
       .catch((e) => console.error('读取本地数据失败', e))
       .finally(() => setReady(true))
   }, [])
@@ -105,7 +118,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     try {
       const res = await fetch('/samples/demo-class.json')
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const sample = (await res.json()) as ClassEntity
+      const sample = normalizeClass((await res.json()) as ClassEntity)
       const exists = classes.some((c) => c.id === sample.id)
       if (exists) sample.id = uid()
       if (exists) sample.name = `${sample.name}（副本）`

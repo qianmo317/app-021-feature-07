@@ -4,9 +4,13 @@ export type SeatTag =
   | 'middle'     // 中排（自动）
   | 'back'       // 后排（自动：后 1/3 行）
   | 'aisle'      // 靠过道（自动/手动）
-  | 'window'     // 靠窗
-  | 'door'       // 靠门
-  | 'stage_side' // 讲台侧（手动标注）
+  | 'window'     // 靠窗（自动/手动）
+  | 'door'       // 靠门（自动/手动）
+  | 'stage_side' // 讲台侧（仅手动标注）
+
+// 允许老师手工补标的标记；front/middle/back 由行数唯一决定，不允许手工覆盖
+export type ManualSeatTag = 'aisle' | 'window' | 'door' | 'stage_side'
+export const MANUAL_SEAT_TAGS: readonly ManualSeatTag[] = ['aisle', 'window', 'door', 'stage_side']
 
 export interface Seat {
   id: string
@@ -14,6 +18,8 @@ export interface Seat {
   col: number
   group?: string
   tags: SeatTag[]
+  // 老师手工补标的标记（来源 = 手动）。布局重算时保留，tags 由「自动标记 ∪ 手动标记」合并而成
+  manualTags?: ManualSeatTag[]
 }
 
 export type Vision = 'none' | 'front_required' | 'middle_required'
