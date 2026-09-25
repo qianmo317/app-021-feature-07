@@ -197,6 +197,7 @@ export function Rotations({ classId }: { classId: string }) {
                 cls={cls}
                 assignment={assignment}
                 draggable
+                tagFilter
                 onSwapPreview={(from, to) => {
                   setDragging(from || null)
                   if (!from || !to) {

@@ -8,12 +8,19 @@ export type SeatTag =
   | 'door'       // 靠门
   | 'stage_side' // 讲台侧（手动标注）
 
+export type SeatTagSource = 'auto' | 'manual' // 自动随布局推导 / 老师手工补标
+
 export interface Seat {
   id: string
   row: number // 0 = 最靠讲台
   col: number
   group?: string
-  tags: SeatTag[]
+  tags: SeatTag[] // 生效标记 = 自动推导 ∪ 手工补标（去重）
+  /**
+   * 老师手工补标的标记（如 stage_side）。布局重算时自动标记整体刷新，
+   * 此列表原样保留；与自动标记重合时来源以手工计。
+   */
+  manualTags?: SeatTag[]
 }
 
 export type Vision = 'none' | 'front_required' | 'middle_required'

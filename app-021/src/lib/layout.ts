@@ -1,4 +1,4 @@
-import type { LayoutConfig, Seat, SeatTag, Student } from '../types'
+import type { LayoutConfig, Seat, SeatTag, SeatTagSource, Student } from '../types'
 
 // ============ 座位布局 ============
 
@@ -6,26 +6,81 @@ export function seatIdOf(row: number, col: number): string {
   return `r${row}c${col}`
 }
 
-// 根据布局配置生成全部座位（含自动标注）
-export function buildSeats(layout: LayoutConfig): Seat[] {
-  const seats: Seat[] = []
+// 随布局自动推导、重算时整体刷新的标记（不含小组组号 group:*，那个也总是重算）
+// front/middle/back 与 aisle/window/door 全部由布局决定，布局一改就重算。
+export const AUTO_TAGS: SeatTag[] = ['front', 'middle', 'back', 'aisle', 'window', 'door']
+// 允许老师手工补标的标记；group:* 为内部组号，不开放手工
+export const MANUAL_TAGS: SeatTag[] = ['stage_side', 'aisle', 'window', 'door']
+
+export const TAG_LABELS: Record<SeatTag, string> = {
+  front: '前排',
+  middle: '中排',
+  back: '后排',
+  aisle: '靠过道',
+  window: '靠窗',
+  door: '靠门',
+  stage_side: '讲台侧',
+}
+
+// 单个座位上某标记的来源：手工补标优先于自动推导（用于 UI 标出来源）
+export function tagSourceOf(seat: Seat, tag: SeatTag): SeatTagSource | undefined {
+  if (!seat.tags.includes(tag)) return undefined
+  return seat.manualTags?.includes(tag) ? 'manual' : 'auto'
+}
+
+// 自动推导：某布局下指定座位应有的全部自动标记
+export function autoTagsOf(layout: LayoutConfig, row: number, col: number): SeatTag[] {
+  const tags: SeatTag[] = []
   const frontThird = Math.max(1, Math.ceil(layout.rows / 3))
+  if (row < frontThird) tags.push('front')
+  else if (row >= layout.rows - frontThird) tags.push('back')
+  else tags.push('middle')
+  if (isAisleSeat(layout, row, col)) tags.push('aisle')
+  const doorCol = layout.doorSide === 'left' ? 0 : layout.cols - 1
+  const windowCol = layout.doorSide === 'left' ? layout.cols - 1 : 0
+  if (col === doorCol) tags.push('door')
+  if (col === windowCol) tags.push('window')
+  return tags
+}
+
+// 根据布局配置生成全部座位（含自动标注）。
+// 布局修改后用新 layout + 旧 seats 调用：自动标记整体重算，
+// 旧座位（id 相同）的手工补标原样保留，确保「标记随布局维护」。
+export function buildSeats(layout: LayoutConfig, prevSeats: Seat[] = []): Seat[] {
+  const prevById = new Map(prevSeats.map((s) => [s.id, s]))
+  const seats: Seat[] = []
   for (let row = 0; row < layout.rows; row++) {
     for (let col = 0; col < layout.cols; col++) {
-      const tags: SeatTag[] = []
-      if (row < frontThird) tags.push('front')
-      else if (row >= layout.rows - frontThird) tags.push('back')
-      else tags.push('middle')
-      if (isAisleSeat(layout, row, col)) tags.push('aisle')
-      const doorCol = layout.doorSide === 'left' ? 0 : layout.cols - 1
-      const windowCol = layout.doorSide === 'left' ? layout.cols - 1 : 0
-      if (col === doorCol) tags.push('door')
-      if (col === windowCol) tags.push('window')
-      if (layout.mode === 'groups') tags.push(`group:${groupOf(row, col, layout.cols)}` as SeatTag)
-      seats.push({ id: seatIdOf(row, col), row, col, tags })
+      const id = seatIdOf(row, col)
+      const manualTags = dedupeTags(prevById.get(id)?.manualTags ?? [])
+      const auto = autoTagsOf(layout, row, col)
+      if (layout.mode === 'groups') auto.push(`group:${groupOf(row, col, layout.cols)}` as SeatTag)
+      const tags = dedupeTags([...auto, ...manualTags])
+      const seat: Seat = { id, row, col, tags }
+      if (manualTags.length) seat.manualTags = manualTags
+      seats.push(seat)
     }
   }
   return seats
+}
+
+// 手工增删一个座位的补标（自动标记不可手工取消，避免标记与布局脱节）
+export function withSeatManualTag(seat: Seat, layout: LayoutConfig, tag: SeatTag, on: boolean): Seat {
+  const cur = new Set(seat.manualTags ?? [])
+  if (on) cur.add(tag)
+  else cur.delete(tag)
+  const manualTags = MANUAL_TAGS.filter((t) => cur.has(t))
+  const auto = autoTagsOf(layout, seat.row, seat.col)
+  if (layout.mode === 'groups') auto.push(`group:${groupOf(seat.row, seat.col, layout.cols)}` as SeatTag)
+  const tags = dedupeTags([...auto, ...manualTags])
+  const next: Seat = { ...seat, tags }
+  if (manualTags.length) next.manualTags = manualTags
+  else delete next.manualTags
+  return next
+}
+
+function dedupeTags(tags: SeatTag[]): SeatTag[] {
+  return [...new Set(tags)]
 }
 
 export function isAisleSeat(layout: LayoutConfig, row: number, col: number): boolean {

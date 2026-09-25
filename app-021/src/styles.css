@@ -136,6 +136,28 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand-weak)
 }
 .privacy-note { border-left: 4px solid var(--good); }
 
+/* ---------- 布局变更影响提示 ---------- */
+.impact-banner { position: relative; margin: 10px 0; padding: 12px 14px; }
+.impact-close { position: absolute; top: 8px; right: 8px; }
+.impact-warn { border-color: #fca5a5; background: #fef2f2; }
+.impact-warn h3 { color: var(--bad); display: flex; gap: 6px; align-items: center; margin: 0 0 6px; font-size: 14px; }
+.impact-ok { border-color: #86efac; background: #f0fdf4; }
+.impact-ok h3 { color: #15803d; display: flex; gap: 6px; align-items: center; margin: 0 0 6px; font-size: 14px; }
+.impact-list { margin: 6px 0 0; padding-left: 4px; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.impact-list li { display: flex; gap: 6px; align-items: baseline; font-size: 13px; }
+.impact-item-worse { color: #991b1b; }
+.impact-item-better { color: #166534; }
+
+/* ---------- 手工补标弹窗 ---------- */
+.tag-source-block { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.tag-source-block .label { font-size: 12.5px; color: var(--muted); }
+.tag-source-chip {
+  display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 10px;
+  font-size: 12px; border: 1px solid var(--line);
+}
+.tag-source-auto { background: #f1f5f9; color: #475569; }
+.tag-source-manual { background: #fce7f3; color: #be185d; border-color: #f9a8d4; }
+
 /* ---------- 座位图 ---------- */
 .seatmap { display: flex; flex-direction: column; gap: 8px; max-width: 860px; }
 .seatmap-print { max-width: none; }
@@ -155,6 +177,37 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand-weak)
 .tag-back { border-color: #fcd34d; background: #fffaf0; }
 .tag-window { box-shadow: inset 3px 0 0 #7dd3fc; }
 .tag-door { box-shadow: inset -3px 0 0 #86efac; }
+.tag-aisle { outline: 1.5px dashed rgba(4, 120, 87, 0.35); outline-offset: -3px; }
+.tag-stage { box-shadow: inset 0 3px 0 0 #f472b6; }
+.seat-clickable { cursor: pointer; }
+.seat-clickable:hover { border-color: var(--brand); }
+.seat-manual-dot {
+  position: absolute; top: 2px; right: 4px; font-size: 10px; line-height: 1;
+  color: #be185d; font-weight: 700;
+}
+.seat-highlight {
+  border-color: var(--brand) !important;
+  box-shadow: 0 0 0 2px rgb(37 99 235 / 0.35), inset 0 0 10px rgb(37 99 235 / 0.12);
+  z-index: 1;
+}
+.seat-dimmed { opacity: 0.28; }
+
+/* 按标记查座位 */
+.tag-filter { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tag-filter-label { font-size: 12.5px; color: var(--muted); }
+.tag-chip {
+  display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 12px;
+  border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 3px 10px;
+  cursor: pointer; color: var(--text);
+}
+.tag-chip:hover { border-color: var(--brand); color: var(--brand); }
+.tag-chip-active { background: var(--brand); border-color: var(--brand); color: #fff; }
+.tag-chip-count {
+  font-style: normal; font-size: 10.5px; font-weight: 700;
+  background: rgb(0 0 0 / 0.08); border-radius: 999px; padding: 0 6px; min-width: 18px; text-align: center;
+}
+.tag-chip-active .tag-chip-count { background: rgb(255 255 255 / 0.25); }
+.tag-filter-hint { font-size: 12px; color: var(--muted); flex-basis: 100%; }
 .seat-occupied { cursor: grab; }
 .seat-occupied:active { cursor: grabbing; }
 .seat-occupied:hover { border-color: var(--brand); }

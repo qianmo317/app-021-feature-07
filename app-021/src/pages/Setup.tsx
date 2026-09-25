@@ -1,15 +1,28 @@
 import { useMemo, useState } from 'react'
 import { Link } from '../router'
 import { useStore } from '../store'
-import type { ClassEntity, LayoutConfig, Student } from '../types'
-import { buildSeats, specialLabel, visionLabel } from '../lib/layout'
+import type { ClassEntity, LayoutConfig, Seat, SeatTag, Student } from '../types'
+import {
+  AUTO_TAGS,
+  MANUAL_TAGS,
+  TAG_LABELS,
+  buildSeats,
+  specialLabel,
+  tagSourceOf,
+  visionLabel,
+  withSeatManualTag,
+} from '../lib/layout'
+import { hardConstraintImpact, type LayoutImpact } from '../lib/fairness'
 import { validateClass } from '../lib/validate'
 import { uid } from '../lib/id'
 import { SeatGrid } from '../components/SeatGrid'
 import {
   AlertTriangle,
   ArrowLeft,
+  CheckCircle2,
   Eraser,
+  Info,
+  Pin,
   Rows3,
   Settings2,
   Table2,
@@ -23,6 +36,7 @@ export function Setup({ classId }: { classId: string }) {
   const cls = getClass(classId)
   const [editing, setEditing] = useState<Student | null>(null)
   const [bulkOpen, setBulkOpen] = useState(false)
+  const [tagSeat, setTagSeat] = useState<Seat | null>(null)
 
   if (!cls) {
     return (
@@ -36,12 +50,13 @@ export function Setup({ classId }: { classId: string }) {
   const errors = validateClass(cls)
   const hasPlan = cls.assignments.length > 0
 
-  const save = (next: ClassEntity, configChanged = false) => {
-    if (configChanged && hasPlan) {
+  const save = (next: ClassEntity, configChanged = false, skipConfirm = false) => {
+    if (configChanged && hasPlan && !skipConfirm) {
       const ok = window.confirm('配置已变更，将清空已生成的轮换结果。继续？')
-      if (!ok) return
+      if (!ok) return false
     }
     updateSetup(next, configChanged)
+    return true
   }
 
   return (
@@ -78,9 +93,22 @@ export function Setup({ classId }: { classId: string }) {
         </div>
       )}
 
-      <LayoutEditor cls={cls} onSave={save} />
+      <LayoutEditor cls={cls} onSave={save} onSeatTag={(seat) => setTagSeat(seat)} />
       <ConstraintEditor cls={cls} onSave={save} />
       <StudentTable cls={cls} onSave={save} onEdit={(s) => setEditing(s)} onBulk={() => setBulkOpen(true)} />
+
+      {tagSeat && (
+        <SeatTagModal
+          cls={cls}
+          seat={tagSeat}
+          onClose={() => setTagSeat(null)}
+          onSave={(seat) => {
+            // 手工补标不改布局、不清空已生成轮换（仅放宽/标注座位属性）
+            save({ ...cls, seats: cls.seats.map((s) => (s.id === seat.id ? seat : s)) }, false)
+            setTagSeat(null)
+          }}
+        />
+      )}
 
       {editing && (
         <StudentModal
@@ -130,17 +158,43 @@ export function Setup({ classId }: { classId: string }) {
 }
 
 // ---------- 座位布局 ----------
-function LayoutEditor({ cls, onSave }: { cls: ClassEntity; onSave: (c: ClassEntity, changed: boolean) => void }) {
+function LayoutEditor({
+  cls,
+  onSave,
+  onSeatTag,
+}: {
+  cls: ClassEntity
+  onSave: (c: ClassEntity, changed: boolean, skipConfirm?: boolean) => void
+  onSeatTag: (seat: Seat) => void
+}) {
+  const [impact, setImpact] = useState<LayoutImpact | null>(null)
+  const [pending, setPending] = useState<{ cls: ClassEntity; impact: LayoutImpact } | null>(null)
+
+  // 布局参数变更：全部座位标记按新布局重算（自动标记刷新，手工补标保留），
+  // 并评估硬约束受影响的学生；已生成轮换时弹确认框（确认后清空轮换）。
   const patch = (p: Partial<LayoutConfig>) => {
     const layout = { ...cls.layout, ...p }
-    let seats = buildSeats(layout)
-    // 布局变化后，失效的固定座位引用清除
-    const seatIds = new Set(seats.map((s) => s.id))
-    const students = cls.students.map((s) =>
-      s.fixedSeatId && !seatIds.has(s.fixedSeatId) ? { ...s, fixedSeatId: undefined } : s,
-    )
-    onSave({ ...cls, layout, seats, students }, true)
+    const seats = buildSeats(layout, cls.seats)
+    const next = withClearedFixedSeats({ ...cls, layout, seats })
+    const imp = hardConstraintImpact(cls, layout, seats)
+    if (cls.assignments.length > 0) {
+      setPending({ cls: next, impact: imp })
+      return
+    }
+    setImpact(imp)
+    onSave(next, false)
   }
+
+  const confirmPending = () => {
+    if (pending) {
+      onSave(pending.cls, true, true) // 自定义确认框已确认，跳过浏览器 confirm
+      setImpact(pending.impact)
+    }
+    setPending(null)
+  }
+
+  const manualSeatCount = cls.seats.filter((s) => (s.manualTags?.length ?? 0) > 0).length
+
   return (
     <section className="card" data-testid="layout-editor">
       <h2>
@@ -203,15 +257,166 @@ function LayoutEditor({ cls, onSave }: { cls: ClassEntity; onSave: (c: ClassEnti
           ))}
         </div>
       )}
+
+      {impact && impact.changedCount > 0 && (
+        <div
+          className={`card impact-banner ${impact.worseCount > 0 ? 'impact-warn' : 'impact-ok'}`}
+          data-testid="layout-impact"
+        >
+          <button className="icon-btn impact-close" title="关闭" onClick={() => setImpact(null)}>
+            <X size={14} />
+          </button>
+          <h3>
+            {impact.worseCount > 0 ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
+            标记已按新布局全部重算
+            {(impact.addedSeats > 0 || impact.removedSeats > 0) && (
+              <>
+                （{impact.removedSeats > 0 && `删除 ${impact.removedSeats} 个座位`}
+                {impact.removedSeats > 0 && impact.addedSeats > 0 && '、'}
+                {impact.addedSeats > 0 && `新增 ${impact.addedSeats} 个座位`}）
+              </>
+            )}
+          </h3>
+          {impact.worseCount > 0 ? (
+            <p>
+              以下 <b>{impact.worseCount}</b> 名学生的硬约束在已有座位表中不再满足，需要重新生成轮换：
+            </p>
+          ) : (
+            <p>没有学生的硬约束因本次调整变为违反；以下变化仅供参考：</p>
+          )}
+          <ul className="impact-list" data-testid="impact-list">
+            {impact.entries.map((e, i) => (
+              <li key={i} className={e.worse ? 'impact-item-worse' : 'impact-item-better'}>
+                {e.worse ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
+                <b>{e.name}</b>：{e.detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="setup-preview">
-        <SeatGrid cls={cls} compact />
+        <SeatGrid cls={cls} compact tagFilter onSeatClick={onSeatTag} />
         <div className="muted small">
-          自动标注：<b>前排/中排/后排</b>（按 1/3 行）、<b>靠窗</b>、<b>靠门</b>、<b>靠过道</b>；
-          「讲台侧」等特殊座位标记可在需求中补充说明。前排座位数 = 前 {cls.constraints.frontRows} 排 ×{' '}
-          {cls.layout.cols} 列 = {Math.min(cls.constraints.frontRows, cls.layout.rows) * cls.layout.cols} 个。
+          <Info size={13} style={{ verticalAlign: -2 }} /> 自动标注：<b>前排/中排/后排</b>（按 1/3 行）、
+          <b>靠窗</b>、<b>靠门</b>、<b>靠过道</b>；布局（行列数 / 过道 / 门方向）一改，全部自动标记立即重算。
+          可<b>点击座位手工补标</b>（如「讲台侧」），补标在重算时保留并用 ✎ 标出来源；当前有 {manualSeatCount}{' '}
+          个座位带手工补标。也可用上方标记按钮按标记查座位、查看剩余空位。前排座位数 = 前{' '}
+          {cls.constraints.frontRows} 排 × {cls.layout.cols} 列 ={' '}
+          {Math.min(cls.constraints.frontRows, cls.layout.rows) * cls.layout.cols} 个。
         </div>
       </div>
+
+      {pending && (
+        <div className="modal-mask" onClick={() => setPending(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} data-testid="layout-confirm">
+            <h2>布局已变更</h2>
+            <p className="muted">座位标记已按新布局全部重算（手工补标保留）。继续将清空已生成的轮换结果。</p>
+            {pending.impact.changedCount > 0 && (
+              <div className={pending.impact.worseCount > 0 ? 'impact-warn' : 'impact-ok'}>
+                <p>
+                  {pending.impact.worseCount > 0
+                    ? `以下 ${pending.impact.worseCount} 名学生的硬约束会在已有座位表中不再满足：`
+                    : '没有学生因本次调整变为违反硬约束。受影响变化：'}
+                </p>
+                <ul className="impact-list">
+                  {pending.impact.entries.map((e, i) => (
+                    <li key={i} className={e.worse ? 'impact-item-worse' : 'impact-item-better'}>
+                      <b>{e.name}</b>：{e.detail}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="modal-actions">
+              <span className="spacer" />
+              <button className="btn" onClick={() => setPending(null)}>
+                取消
+              </button>
+              <button className="btn btn-primary" data-testid="layout-confirm-ok" onClick={confirmPending}>
+                继续并重算标记
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
+  )
+}
+
+// 布局缩小后失效的固定座位引用清除
+function withClearedFixedSeats(next: ClassEntity): ClassEntity {
+  const seatIds = new Set(next.seats.map((s) => s.id))
+  const students = next.students.map((s) =>
+    s.fixedSeatId && !seatIds.has(s.fixedSeatId) ? { ...s, fixedSeatId: undefined } : s,
+  )
+  return { ...next, students }
+}
+
+// ---------- 座位手工补标弹窗 ----------
+function SeatTagModal({
+  cls,
+  seat,
+  onClose,
+  onSave,
+}: {
+  cls: ClassEntity
+  seat: Seat
+  onClose: () => void
+  onSave: (seat: Seat) => void
+}) {
+  const [draft, setDraft] = useState<Seat>(seat)
+  const toggle = (tag: SeatTag, on: boolean) => {
+    setDraft(withSeatManualTag(draft, cls.layout, tag, on))
+  }
+  const autoTags = AUTO_TAGS.filter((t) => draft.tags.includes(t))
+  return (
+    <div className="modal-mask" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} data-testid="seat-tag-modal">
+        <h2>
+          <Pin size={16} /> 第 {seat.row + 1} 排第 {seat.col + 1} 列 · 座位标记
+        </h2>
+        <div className="tag-source-block">
+          <span className="label">布局自动推导（随布局重算，不可手工取消）：</span>
+          <div className="chip-list">
+            {autoTags.length === 0 && <span className="muted">无</span>}
+            {autoTags.map((t) => (
+              <span key={t} className="tag-source-chip tag-source-auto" title="自动标记：布局变更时重算">
+                {TAG_LABELS[t]} · 自动
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="tag-source-block">
+          <span className="label">老师手工补标（布局重算时保留）：</span>
+          <div className="chip-list">
+            {MANUAL_TAGS.map((t) => {
+              const checked = draft.manualTags?.includes(t) ?? false
+              const isAuto = tagSourceOf(draft, t) === 'auto'
+              return (
+                <label key={t} className="checkbox chip">
+                  <input type="checkbox" checked={checked} data-tag={t} onChange={(e) => toggle(t, e.target.checked)} />
+                  {TAG_LABELS[t]}
+                  {isAuto && !checked && <em className="muted">（自动已有；勾选后来源记为手工）</em>}
+                </label>
+              )
+            })}
+          </div>
+        </div>
+        <p className="muted small">
+          保存后该座位将带 ✎ 标出手工来源；之后调整行列数、过道或门方向时，自动标记重算、手工补标保留。
+        </p>
+        <div className="modal-actions">
+          <span className="spacer" />
+          <button className="btn" onClick={onClose}>
+            取消
+          </button>
+          <button className="btn btn-primary" data-testid="seat-tag-save" onClick={() => onSave(draft)}>
+            保存
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

@@ -1,4 +1,4 @@
-import type { ClassEntity, Seat, Student, StudentId } from '../types'
+import type { ClassEntity, Constraints, LayoutConfig, Seat, Student, StudentId } from '../types'
 import { buildSeatIndex, middleColSet, positionScore } from './layout'
 
 // ================= 公平性报告（§4.4 / §10） =================
@@ -249,6 +249,162 @@ export function computeFairness(cls: ClassEntity): FairnessReport {
     deskmateOverLimit,
     heightViolations,
     hardViolations,
+  }
+}
+
+// 布局变更影响评估：对比新旧座位标记，逐学生逐周检查依赖座位标记的
+// 硬约束（视力前排 / 视力中间列 / 听力前半 / 行动不便靠过道）以及固定座位引用，
+// 列出「状态发生变化」的学生与变化点，供布局编辑时提示老师。
+export type ConstraintCode = 'front' | 'middle' | 'hearing' | 'aisle' | 'fixed'
+
+export interface ImpactEntry {
+  studentId: StudentId
+  name: string
+  worse: boolean // true = 由满足变为违反（需要重点提示）
+  weeks: number[] // 出问题的周次（0 表示固定座位设置本身）
+  code: ConstraintCode
+  detail: string
+}
+
+export interface LayoutImpact {
+  entries: ImpactEntry[]
+  studentNames: string[] // 去重后的受影响学生（恶化的排前面）
+  worseCount: number
+  changedCount: number // 去重学生数
+  addedSeats: number
+  removedSeats: number
+}
+
+// 不依赖座位标记文本的个体硬约束违反码（与引擎 violOf 同口径，直接按布局算位置）
+function violationCodes(
+  student: Student,
+  seat: Seat | undefined,
+  layout: LayoutConfig,
+  constraints: Constraints,
+): ConstraintCode[] {
+  if (!seat) return student.fixedSeatId ? ['fixed'] : []
+  const out: ConstraintCode[] = []
+  if (student.vision === 'front_required' && seat.row >= constraints.frontRows) out.push('front')
+  if (student.vision === 'middle_required' && !middleColSet(layout).has(seat.col)) out.push('middle')
+  if (student.special?.includes('hearing') && seat.row >= Math.ceil(layout.rows / 2)) out.push('hearing')
+  if (
+    student.special?.includes('mobility') &&
+    !(seat.tags.includes('aisle') || seat.col === 0 || seat.col === layout.cols - 1)
+  ) {
+    out.push('aisle')
+  }
+  return out
+}
+
+const CODE_LABEL: Record<ConstraintCode, string> = {
+  front: '需前排',
+  middle: '需中间列',
+  hearing: '听力需前排一半',
+  aisle: '行动不便需靠过道',
+  fixed: '固定座位',
+}
+
+export function hardConstraintImpact(
+  oldCls: ClassEntity,
+  newLayout: LayoutConfig,
+  newSeats: Seat[],
+): LayoutImpact {
+  const oldById = new Map(oldCls.seats.map((s) => [s.id, s]))
+  const newById = new Map(newSeats.map((s) => [s.id, s]))
+  const constraints = { ...oldCls.constraints, frontRows: Math.min(oldCls.constraints.frontRows, newLayout.rows) }
+  const relevant = (s: Student) =>
+    s.vision !== 'none' || !!s.special?.length || !!s.fixedSeatId
+  const entries: ImpactEntry[] = []
+
+  const compare = (student: Student, seatId: string | undefined, week: number) => {
+    const oldSeat = seatId ? oldById.get(seatId) : undefined
+    const newSeat = seatId ? newById.get(seatId) : undefined
+    // 座位本身被删掉（布局缩小）：固定座位引用失效算恶化
+    if (seatId && !newSeat) {
+      if (student.fixedSeatId === seatId) {
+        entries.push({
+          studentId: student.id,
+          name: student.name,
+          worse: true,
+          weeks: [0],
+          code: 'fixed',
+          detail: CODE_LABEL.fixed,
+        })
+      }
+      return
+    }
+    const oldV = new Set(violationCodes(student, oldSeat, oldCls.layout, oldCls.constraints))
+    const newV = new Set(violationCodes(student, newSeat, newLayout, constraints))
+    for (const code of newV) {
+      if (!oldV.has(code)) {
+        entries.push({ studentId: student.id, name: student.name, worse: true, weeks: [week], code, detail: CODE_LABEL[code] })
+      }
+    }
+    for (const code of oldV) {
+      if (!newV.has(code)) {
+        entries.push({ studentId: student.id, name: student.name, worse: false, weeks: [week], code, detail: CODE_LABEL[code] })
+      }
+    }
+  }
+
+  for (const student of oldCls.students) {
+    if (!relevant(student)) continue
+    // 固定座位设置本身（不属于任何一周）
+    if (student.fixedSeatId) compare(student, student.fixedSeatId, 0)
+    for (const asg of oldCls.assignments) {
+      const seatId = Object.entries(asg.map).find(([, sid]) => sid === student.id)?.[0]
+      if (seatId) compare(student, seatId, asg.week)
+    }
+  }
+
+  // 同一学生 + 同一 code 合并周次与描述
+  const merged = new Map<string, ImpactEntry>()
+  for (const e of entries) {
+    const key = `${e.studentId}|${e.code}|${e.worse}`
+    const m = merged.get(key)
+    if (m) {
+      for (const w of e.weeks) if (!m.weeks.includes(w)) m.weeks.push(w)
+    } else {
+      merged.set(key, { ...e, weeks: [...e.weeks] })
+    }
+  }
+  const list = [...merged.values()].map((e) => {
+    const inWeeks = e.weeks.filter((w) => w > 0).sort((a, b) => a - b)
+    let detail = CODE_LABEL[e.code]
+    if (e.code === 'fixed' && e.worse && inWeeks.length === 0) {
+      detail = '固定座位在新布局中不存在'
+    } else if (inWeeks.length > 0) {
+      detail += e.worse ? `不再满足（第 ${inWeeks.join('、')} 周）` : `转为满足（第 ${inWeeks.join('、')} 周）`
+    } else {
+      detail += e.worse ? '不再满足' : '转为满足'
+    }
+    return { ...e, weeks: e.weeks.sort((a, b) => a - b), detail }
+  })
+
+  // 恶化学生在前；同组按姓名稳定
+  list.sort((a, b) => Number(b.worse) - Number(a.worse) || a.name.localeCompare(b.name, 'zh'))
+  const seen = new Set<string>()
+  const studentNames: string[] = []
+  for (const e of list) {
+    if (!seen.has(e.studentId)) {
+      seen.add(e.studentId)
+      studentNames.push(e.name)
+    }
+  }
+  const oldIds = new Set(oldCls.seats.map((s) => s.id))
+  const newIds = new Set(newSeats.map((s) => s.id))
+  let addedSeats = 0
+  let removedSeats = 0
+  for (const id of newIds) if (!oldIds.has(id)) addedSeats++
+  for (const id of oldIds) if (!newIds.has(id)) removedSeats++
+
+  return {
+    entries: list,
+    studentNames,
+    worseCount: new Set(list.filter((e) => e.worse).map((e) => e.studentId)).size,
+    changedCount: studentNames.length,
+    addedSeats,
+    removedSeats,
   }
 }
 

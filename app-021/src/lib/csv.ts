@@ -1,6 +1,6 @@
 import type { ClassEntity } from '../types'
 import type { FairnessReport } from './fairness'
-import { buildSeatIndex } from './layout'
+import { buildSeatIndex, TAG_LABELS } from './layout'
 
 // CSV 导出（带 BOM，Excel 直接打开不乱码）
 export function toCSV(rows: (string | number)[][]): string {
@@ -77,7 +77,10 @@ export function weeksCSV(cls: ClassEntity): (string | number)[][] {
     for (const [seatId, studentId] of Object.entries(asg.map)) {
       const seat = idx.byId.get(seatId)
       if (!seat) continue
-      const tagText = seat.tags.filter((t) => t !== 'middle').join('/')
+      const tagText = seat.tags
+        .filter((t) => t !== 'middle' && !t.startsWith('group:'))
+        .map((t) => TAG_LABELS[t] ?? t)
+        .join('/')
       rows.push([asg.week, seat.row + 1, seat.col + 1, seat.id, nameOf.get(studentId) ?? studentId, tagText])
     }
   }

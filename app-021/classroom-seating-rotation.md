@@ -97,7 +97,7 @@ class InfeasibleError extends Error {}
 - README 算法节写「任意两人同桌 ≤ 2 次」，实际是软目标：第 3 / 4 次同桌的惩罚为 `REPEAT2 = 60` / `REPEAT3 = 500`（`engine.ts:16-17`），不是禁止级；示例班级配置下验收为 0（`tests/acceptance.test.ts:45`），但不构成数学保证。
 - README 算法节称「均衡每人前 N 排次数，极差 ≤ 3」：该断言只在**无固定座位**的用例中被断言（`tests/acceptance.test.ts:29-34`）；示例班级含 10 个固定座位时 E2E 只校验数值如实渲染，测试注释也写明固定座位会把极差拉大（`e2e/sample.spec.ts:24-27`）。
 - `generateMissingWeeks()`（周数调大后补齐缺失周次）在引擎与 store 中已实现，`RegenMode` 也含 `'missing'`（`store.tsx:17,178-180`），但轮换页的 `regen()` 只暴露 `all` / `from` / `week` 三种模式（`Rotations.tsx:45`），UI 无补齐入口。
-- `SeatTag` 的 `stage_side` 在 `buildSeats()` 中从不生成，`Seat.group` 字段也从不写入（分组信息实际放在 `tags` 的 `group:G{n}` 里）；Setup 页只在说明文字里提到「讲台侧等特殊座位标记可在需求中补充说明」（`layout.ts:10-29`、`Setup.tsx:208-212`）。
+- `SeatTag` 的 `stage_side` 不由 `buildSeats()` 自动生成，但已支持老师在 Setup 页**点击座位手工补标**（`Seat.manualTags` 记录来源）；自动标记（front/middle/back、aisle、window、door、group:*）随布局改动由 `buildSeats(layout, prevSeats)` 整体重算，手工补标按座位 id 保留、UI 用 ✎ 标来源（`layout.ts`、`Setup.tsx` 的 `SeatTagModal`）。布局改动时 `hardConstraintImpact()` 逐周对比新旧标记对四类个体硬约束的影响并点名学生；座位图另有按标记筛选入口（高亮 + 剩余空位数）。`Seat.group` 字段仍从不写入（分组信息在 `tags` 的 `group:G{n}` 里）。
 - 「撤销上次交换」是**单级**的：`undoRef` 只保留最近一次交换（`store.tsx:57,207,220-237`），连续交换两次只能撤销最后一次。
 - README 隐私节称「没有任何网络请求」：唯一请求是同源静态读取 `GET /samples/demo-class.json`（`store.tsx:106`），不发送任何学生数据，但并非零请求。
 - `engine.ts` 顶注称「全程不使用 Math.random」，同文件的 `randomSeed()` 确实调用了 `Math.random`（`engine.ts:642-645`）；它只服务于「换种子」按钮，不进入生成路径，不影响可复现性。
